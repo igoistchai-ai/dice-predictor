@@ -1,1 +1,174 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Dice by Game ID</title>
+<style>
+:root{--bg:#07080d;--card:rgba(255,255,255,.05);--edge:rgba(255,255,255,.1);--t1:#f2f2f8;--t2:#9ea0bd;--t3:#5f6179;--ac:#7b6cf6;color-scheme:dark}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:system-ui,-apple-system,'Segoe UI',sans-serif;background:radial-gradient(800px 500px at 10% -10%,rgba(123,108,246,.18),transparent 60%),var(--bg);color:var(--t1);min-height:100dvh;display:flex;justify-content:center;padding:28px 16px 40px}
+.wrap{width:100%;max-width:480px;display:flex;flex-direction:column;gap:14px}
+h1{font-size:20px;font-weight:650}
+.card{background:var(--card);border:1px solid var(--edge);border-radius:18px;padding:18px;backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);animation:in .5s cubic-bezier(.2,.8,.2,1) both}
+.card:nth-of-type(2){animation-delay:.07s}.card:nth-of-type(3){animation-delay:.14s}
+@keyframes in{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
+.label{font-size:11px;letter-spacing:1.2px;text-transform:uppercase;color:var(--t3);margin-bottom:12px}
+.row{display:flex;gap:8px}
+input{flex:1;min-width:0;padding:13px 14px;border-radius:12px;border:1px solid var(--edge);background:rgba(0,0,0,.3);color:var(--t1);font:500 15px system-ui,sans-serif;outline:none;transition:border-color .2s,box-shadow .2s}
+input:focus{border-color:var(--ac);box-shadow:0 0 0 4px rgba(123,108,246,.18)}
+button.go{padding:0 22px;border-radius:12px;border:none;background:var(--ac);color:#fff;font:700 14px system-ui,sans-serif;cursor:pointer;transition:transform .12s,background .2s}
+button.go:hover{background:#6a5ae8}button.go:active{transform:scale(.96)}button.go:disabled{opacity:.5;cursor:default}
+.status{font-size:13px;color:var(--t2);margin-top:10px;min-height:18px;line-height:1.5}
+.status.err{color:#ff8a94}
+.pick{display:none;text-align:center;padding:10px 0 4px;animation:pop .5s cubic-bezier(.2,.8,.2,1)}
+.pick.show{display:block}
+@keyframes pop{from{transform:scale(.9);opacity:0}}
+.pick .name{font-size:30px;font-weight:750;letter-spacing:-.5px;text-shadow:0 2px 14px var(--c)}
+.pick .conf{font-size:13px;color:var(--t2);margin-top:6px}
+.analysis{font-size:14px;line-height:1.6;color:var(--t1);margin-top:12px}
+svg{width:100%;height:auto;display:block;margin-top:6px}
+.legend{display:flex;flex-wrap:wrap;gap:10px;margin-top:10px;font-size:12px;color:var(--t2)}
+.legend i{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:6px;vertical-align:-1px}
+.empty{font-size:13px;color:var(--t3)}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Dice by Game ID</h1>
 
+  <section class="card">
+    <div class="label">Game ID</div>
+    <div class="row">
+      <input id="gid" placeholder="Enter game ID" inputmode="numeric" autocomplete="off">
+      <button class="go" id="go">Analyze</button>
+    </div>
+    <div class="status" id="status">Enter a game ID and press Analyze.</div>
+  </section>
+
+  <section class="card" id="result" hidden>
+    <div class="pick" id="pick">
+      <div class="name" id="pickName"></div>
+      <div class="conf" id="pickConf"></div>
+    </div>
+    <div class="analysis" id="analysis"></div>
+  </section>
+
+  <section class="card" id="chartCard" hidden>
+    <div class="label">Share of each color over time</div>
+    <svg id="chart" viewBox="0 0 600 260" preserveAspectRatio="none"></svg>
+    <div class="legend" id="legend"></div>
+  </section>
+</div>
+
+<script>
+/* Set this to the real history endpoint for a game.
+   Must return JSON with a list of colors, e.g. {"results":[{"color":"red"}, ...]} or ["red","blue",...]. */
+const HISTORY_URL = ""; // e.g. "https://your-server.onrender.com/api/history/{id}"
+
+const COLORS = {
+  red:"#e5484d", yellow:"#e0a31c", green:"#30a46c", blue:"#3b82f6",
+  orange:"#e8772e", purple:"#8e5cf0", white:"#c9cbe0", black:"#5a5d75"
+};
+const KEYS = Object.keys(COLORS);
+const DECAY = 0.97, SMOOTH = 1;
+const $ = s => document.querySelector(s);
+
+function parseColors(data){
+  const raw = Array.isArray(data) ? data : (data.results || data.history || data.colors || []);
+  return raw.map(r => String(typeof r === "string" ? r : (r.color || "")).toLowerCase()).filter(c => COLORS[c]);
+}
+
+/* weighted, smoothed estimate, same method as before */
+function estimate(hist){
+  const w = Object.fromEntries(KEYS.map(k => [k,0])), n = hist.length;
+  hist.forEach((c,i) => w[c] += Math.pow(DECAY, n-1-i));
+  const total = Object.values(w).reduce((a,b)=>a+b,0) + SMOOTH*KEYS.length;
+  return KEYS.map(k => ({key:k, p:(w[k]+SMOOTH)/total})).sort((a,b)=>b.p-a.p);
+}
+
+function analysisText(hist, est){
+  const top = est[0], second = est[1], n = hist.length;
+  const last = hist[n-1];
+  let streak = 0; for (let i=n-1;i>=0 && hist[i]===last;i--) streak++;
+  const lines = [];
+  lines.push(`Based on ${n} rolls, ${top.key} has the highest weighted share (${(top.p*100).toFixed(1)}%), followed by ${second.key} (${(second.p*100).toFixed(1)}%).`);
+  if (streak > 2) lines.push(`${last} has come up ${streak} times in a row. Streaks happen by chance too, so this alone does not mean the next roll changes.`);
+  const spread = est[0].p - est[est.length-1].p;
+  lines.push(spread < 0.03
+    ? "The colors are close to even, so the estimate is weak."
+    : "The colors are not evenly spread. A wider gap means more data is needed to be sure.");
+  lines.push("This is a statistical estimate from past results. If the dice are fair, each roll is independent.");
+  return lines.join(" ");
+}
+
+/* cumulative share chart, drawn with plain SVG */
+function drawChart(hist){
+  const svg = $("#chart"), W = 600, H = 260, pad = 26;
+  const step = Math.max(1, Math.floor(hist.length / 60));
+  const counts = Object.fromEntries(KEYS.map(k=>[k,0]));
+  const series = Object.fromEntries(KEYS.map(k=>[k,[]]));
+  hist.forEach((c,i) => {
+    counts[c]++;
+    if (i % step === 0 || i === hist.length-1)
+      KEYS.forEach(k => series[k].push(counts[k]/(i+1)));
+  });
+  const xs = s => pad + (s.length<2?0:(W-2*pad)*0);
+  let out = "";
+  for (let g=0; g<=4; g++){
+    const y = pad + (H-2*pad)*g/4;
+    out += `<line x1="${pad}" x2="${W-pad}" y1="${y}" y2="${y}" stroke="rgba(255,255,255,.07)"/>`;
+    out += `<text x="${pad-6}" y="${y+4}" fill="#5f6179" font-size="11" text-anchor="end">${Math.round((1-g/4)*100)}%</text>`;
+  }
+  KEYS.forEach(k => {
+    const s = series[k]; if (s.length < 2) return;
+    const pts = s.map((v,i) => {
+      const x = pad + (W-2*pad)*i/(s.length-1);
+      const y = pad + (H-2*pad)*(1-v);
+      return `${x.toFixed(1)},${y.toFixed(1)}`;
+    }).join(" ");
+    out += `<polyline points="${pts}" fill="none" stroke="${COLORS[k]}" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round" style="stroke-dasharray:2000;stroke-dashoffset:2000;animation:draw 1.4s ease forwards"/>`;
+  });
+  svg.innerHTML = `<style>@keyframes draw{to{stroke-dashoffset:0}}</style>` + out;
+  $("#legend").innerHTML = KEYS.map(k => `<span><i style="background:${COLORS[k]}"></i>${k}</span>`).join("");
+}
+
+async function analyze(){
+  const id = $("#gid").value.trim();
+  const st = $("#status"), btn = $("#go");
+  if (!id){ st.className="status err"; st.textContent="Enter a game ID."; return; }
+  if (!HISTORY_URL){
+    st.className="status err";
+    st.textContent="Data source is not connected yet. Send the history endpoint for this game and it will be added here.";
+    return;
+  }
+  btn.disabled = true; st.className="status"; st.textContent="Loading history…";
+  try{
+    const res = await fetch(HISTORY_URL.replace("{id}", encodeURIComponent(id)), {headers:{Accept:"application/json"}});
+    if (!res.ok) throw new Error("HTTP "+res.status);
+    const hist = parseColors(await res.json()).slice(-100);
+    if (hist.length < 5) throw new Error("not enough rolls (" + hist.length + ")");
+    const est = estimate(hist), top = est[0];
+    $("#result").hidden = false; $("#chartCard").hidden = false;
+    $("#pick").classList.remove("show"); void $("#pick").offsetWidth;
+    $("#pickName").textContent = top.key.toUpperCase();
+    $("#pickName").style.setProperty("--c", COLORS[top.key]);
+    $("#pickName").style.color = COLORS[top.key];
+    $("#pickConf").textContent = `${(top.p*100).toFixed(1)}% weighted share · ${hist.length} rolls`;
+    $("#pick").classList.add("show");
+    $("#analysis").textContent = analysisText(hist, est);
+    drawChart(hist);
+    st.className="status"; st.textContent=`Loaded ${hist.length} rolls for game ${id}.`;
+  }catch(e){
+    st.className="status err"; st.textContent=`Could not load history: ${e.message}`;
+  }finally{
+    btn.disabled = false;
+  }
+}
+
+$("#go").onclick = analyze;
+$("#gid").addEventListener("keydown", e => { if (e.key === "Enter") analyze(); });
+</script>
+</body>
+</html>
